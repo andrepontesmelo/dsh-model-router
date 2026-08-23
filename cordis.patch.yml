@@ -1,0 +1,14 @@
+# dsh-model-router 组合包补丁：把模型路由插件插入 profile。
+# 示例条目 —— 修改 id（任意唯一值）并把 config.routes 改为实际想要的路由。
+- insert:
+    - id: model-router
+      name: 'dsh-model-router'
+      config:
+        routes:
+          - id: virtual-a
+            algorithm: priority
+            candidates:
+              - provider: deepseek-official
+                model: deepseek-v4-flash
+              - provider: pi-ai
+                model: <model id>
