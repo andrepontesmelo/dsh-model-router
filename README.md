@@ -35,21 +35,27 @@ An algorithm is a **factory**:
 factory(ctx, routes) => {
   select(route, callCtx)    // -> candidate | undefined
   onFailure(route, candidate, callCtx)
+  onSuccess?(route, candidate, callCtx)   // optional; shim calls it on success
 }
 ```
 
 - `select` returns one candidate from `route.candidates` to dispatch now
-  (`undefined` = exhausted, failover stops, error surfaces).
+  (`undefined` = exhausted, failover stops, error surfaces). It must be PURE:
+  the shim probes it for boolean checks (`peek()`), so no state may advance.
 - `onFailure` records a failed candidate so the next `select` skips it.
+- `onSuccess` (optional) is called by the shim when a dispatch finishes
+  successfully — e.g. round-robin advances its rotation cursor there.
 - `callCtx` carries per-request state (`{ failed }`, a set keyed by
   `provider\0model`); algorithms may extend it.
 
 The registry maps name → factory (`lib/routing.js`): `register(name, factory)`,
-`resolve(name)`, `has(name)`, `names()`. `'priority'` is implemented (ordered
-failover — first candidate whose provider has a live registered adapter and
-has not failed this request); `'round-robin'` is still a placeholder (rotating
-index) owned by its own slice. A future algorithm registers into the same
-registry — no restructuring of the shim or plugin entry.
+`resolve(name)`, `has(name)`, `names()`. Both built-ins are implemented:
+`'priority'` (ordered failover — first candidate whose provider has a live
+registered adapter and has not failed this request) and `'round-robin'`
+(rotating cursor over live candidates; advances only on successful dispatch,
+so retries within one request never consume a rotation slot). A future
+algorithm registers into the same registry — no restructuring of the shim or
+plugin entry.
 
 ## Seam mechanics (proven by prototype/)
 

@@ -127,14 +127,16 @@ test("failover: alpha failure -> retry -> beta serves; exhaustion -> no retry", 
 	const c2 = await collect();
 	const text = c2.filter((c) => c.type === "text-delta").map((c) => c.text).join("");
 	assert.equal(text, "beta/beta-model");
-	// Exhaustion: mark beta failed too -> no retry left.
-	await ctx.waterfall({}, "agent/request-error", {
+	// Marking the SERVED candidate (beta — the corrected markCurrentFailed
+	// always marks the last-picked candidate, not whatever hasCandidate
+	// last probed) failed leaves alpha live again, so the listener retries.
+	const stillRetry = await ctx.waterfall({}, "agent/request-error", {
 		provider: "virtual-a", failure: c1.at(-1).reason.failure, signal
 	}, () => Promise.resolve(void 0));
-	const exhausted = await ctx.waterfall({}, "agent/request-error", {
-		provider: "virtual-a", failure: c1.at(-1).reason.failure, signal
-	}, () => Promise.resolve(void 0));
-	assert.equal(exhausted, void 0);
+	assert.deepEqual(stillRetry, { kind: "retry" });
+	// Genuine exhaustion (all real candidates failing) is covered by the
+	// dedicated "priority: exhaustion stops retrying" test below, which walks
+	// fresh failing dispatches instead of re-firing a stale failure.
 });
 
 test("algorithm registry resolves both built-in names", () => {
@@ -279,6 +281,85 @@ test("priority: failed set resets after a successful dispatch", async () => {
 	const chunks3 = [];
 	for await (const chunk of c3.stream(request)) chunks3.push(chunk);
 	assert.equal(chunks3.at(-1).reason.kind, "error"); // alpha picked again (failed set reset)
+});
+
+// --- round-robin (rotating cursor) ---
+
+/** Register alpha (+beta, +opt gamma) mocks and dispatch through a round-robin route. */
+function rrSetup({ alphaOk = true, betaOk = true, unregisteredLead = false, withGamma = false } = {}) {
+	const ctx = new Context();
+	const llm = new LlmRuntime(ctx);
+	llm.registerAdapter(["alpha"], failingMock("alpha", "alpha-model", alphaOk));
+	llm.registerAdapter(["beta"], failingMock("beta", "beta-model", betaOk));
+	if (withGamma) llm.registerAdapter(["gamma"], failingMock("gamma", "gamma-model", true));
+	const candidates = [
+		...(unregisteredLead ? [{ provider: "ghost", model: "ghost-model" }] : []),
+		{ provider: "alpha", model: "alpha-model" },
+		{ provider: "beta", model: "beta-model" },
+		...(withGamma ? [{ provider: "gamma", model: "gamma-model" }] : [])
+	];
+	apply(ctx, { routes: [{ id: "virtual-r", algorithm: "round-robin", candidates }] });
+	const request = { provider: "virtual-r", model: "virtual-r", messages: [] };
+	const signal = new AbortController().signal;
+	const collect = async () => {
+		const prepared = await llm.prepareCall(request, signal);
+		const chunks = [];
+		for await (const chunk of prepared.stream(request)) chunks.push(chunk);
+		return chunks;
+	};
+	return { ctx, llm, collect, request, signal };
+}
+
+test("round-robin: consecutive requests rotate alpha -> beta -> alpha", async () => {
+	const { collect, llm } = rrSetup();
+	const text = async () => (await collect()).filter((c) => c.type === "text-delta").map((c) => c.text).join("");
+	assert.equal(await text(), "alpha/alpha-model");
+	assert.equal(await text(), "beta/beta-model");
+	assert.equal(await text(), "alpha/alpha-model");
+	// Position persistence: the failed set cleared after EVERY successful
+	// finish, yet the rotation continued — the cursor lives on the algorithm
+	// instance, not on the per-request failed set.
+	const shim = llm.registration("virtual-r").adapter;
+	assert.equal(shim.failed.size, 0);
+});
+
+test("round-robin: failed candidate skipped on retry within the same request", async () => {
+	const { ctx, collect, request, signal } = rrSetup({ alphaOk: false, withGamma: true });
+	// First dispatch lands on alpha (cursor 0) and fails.
+	const c1 = await collect();
+	assert.equal(c1.at(-1).reason.kind, "error");
+	const a1 = await ctx.waterfall({}, "agent/request-error", {
+		provider: request.provider, failure: c1.at(-1).reason.failure, signal
+	}, () => Promise.resolve(void 0));
+	assert.deepEqual(a1, { kind: "retry" });
+	// The retry within the SAME request skips failed alpha and serves beta.
+	const c2 = await collect();
+	assert.equal(c2.filter((c) => c.type === "text-delta").map((c) => c.text).join(""), "beta/beta-model");
+	// beta's SUCCESS advanced the cursor past beta (to gamma). The failed
+	// alpha did NOT consume a slot. Three candidates make this observable:
+	// a slot-consuming select would land anywhere but gamma here.
+	const c3 = await collect();
+	assert.equal(c3.filter((c) => c.type === "text-delta").map((c) => c.text).join(""), "gamma/gamma-model");
+});
+
+test("round-robin: unregistered candidate skipped; exhaustion surfaces the error", async () => {
+	const { ctx, collect, request, signal } = rrSetup({ alphaOk: false, betaOk: false, unregisteredLead: true });
+	// ghost has no adapter -> skipped by liveness; alpha is picked and fails.
+	const c1 = await collect();
+	assert.equal(c1.at(-1).reason.kind, "error");
+	const a1 = await ctx.waterfall({}, "agent/request-error", {
+		provider: request.provider, failure: c1.at(-1).reason.failure, signal
+	}, () => Promise.resolve(void 0));
+	assert.deepEqual(a1, { kind: "retry" });
+	// Retry skips failed alpha, lands on beta; beta fails too.
+	const c2 = await collect();
+	assert.equal(c2.at(-1).reason.kind, "error");
+	// Mark beta failed -> no live candidates remain -> the failover listener
+	// stops retrying, so the original error surfaces.
+	const a2 = await ctx.waterfall({}, "agent/request-error", {
+		provider: request.provider, failure: c2.at(-1).reason.failure, signal
+	}, () => Promise.resolve(void 0));
+	assert.equal(a2, void 0);
 });
 
 test("config with a delegation cycle is rejected at apply time", async () => {
