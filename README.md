@@ -45,11 +45,11 @@ factory(ctx, routes) => {
   `provider\0model`); algorithms may extend it.
 
 The registry maps name → factory (`lib/routing.js`): `register(name, factory)`,
-`resolve(name)`, `has(name)`, `names()`. `'priority'` and `'round-robin'` are
-registered by default with **placeholder** semantics (first-not-failed /
-rotating index); two later slices replace them with properly tested
-semantics. A future algorithm registers into the same registry — no
-restructuring of the shim or plugin entry.
+`resolve(name)`, `has(name)`, `names()`. `'priority'` is implemented (ordered
+failover — first candidate whose provider has a live registered adapter and
+has not failed this request); `'round-robin'` is still a placeholder (rotating
+index) owned by its own slice. A future algorithm registers into the same
+registry — no restructuring of the shim or plugin entry.
 
 ## Seam mechanics (proven by prototype/)
 
@@ -72,5 +72,21 @@ npm test          # node --test
 ```
 
 No network, no API keys: an in-memory Cordis `Context` + real `LlmRuntime` +
-mock adapters prove config parsing, per-route shim registration, and registry
-resolution of both built-in algorithms.
+mock adapters prove config parsing, per-route shim registration, registry
+resolution, delegation, priority failover/exhaustion/reset, and cycle
+rejection.
+
+## Known limitations
+
+- **Round-robin changes the real model across requests**: resume/retry can
+  land on a different real model than produced earlier history (breaks the
+  KV-cache prefix). Accepted for v1.
+- **Failed-candidate state is per shim instance**, shared by all in-flight
+  requests on that route. A concurrent success can clear failure marks a
+  still-running failover chain relies on — the worst case is one redundant
+  retry of a down candidate (bounded). Fine for the single-user local
+  harness; per-request keying via `callCtx` is the ready-made hardening seam.
+- **Delegation cycles are rejected at config time** (`apply()` throws on any
+  route graph whose candidates delegate back into a virtual provider,
+  directly or transitively) — otherwise such a config would recurse in the
+  shim until `RangeError`.
