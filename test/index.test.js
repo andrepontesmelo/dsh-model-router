@@ -33,6 +33,21 @@ test("Config rejects an unknown algorithm name", () => {
 	] }), /algorithm/);
 });
 
+test("Config accepts an optional per-route model field and normalizes", () => {
+	// With `model`: field passes through unchanged.
+	assert.deepEqual(Config({ routes: [
+		{ id: "virtual-a", model: "chat", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }
+	] }), { routes: [
+		{ id: "virtual-a", model: "chat", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }
+	] });
+	// Without `model`: identical shape to the pre-field schema (backward compatible).
+	assert.deepEqual(Config({ routes: [
+		{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }
+	] }), { routes: [
+		{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }
+	] });
+});
+
 /** Minimal in-memory adapter emitting a valid chunk stream, no network. */
 class MockAdapter extends LlmAdapter {
 	constructor(provider, model) {
@@ -87,6 +102,38 @@ test("a virtual route delegates to the real adapter via direct registration look
 	const text = chunks.filter((c) => c.type === "text-delta").map((c) => c.text).join("");
 	assert.equal(text, "alpha/alpha-model");
 	assert.equal(chunks.at(-1).reason.kind, "stop");
+});
+
+test("shim advertises exactly one picker model for the route (default virtual id)", async () => {
+	const ctx = new Context();
+	const llm = setup(ctx, [
+		{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }
+	]);
+	// Runs through the runtime's listModels validation: provider === arg,
+	// non-empty string id/name, unique ids. No adapter-shape errors.
+	const models = await llm.listModels("virtual-a");
+	assert.equal(models.length, 1);
+	assert.deepEqual(models[0], { provider: "virtual-a", id: "virtual-a", name: "virtual-a/virtual-a" });
+	// The advertised entry resolves: resolveModelInfo must accept our
+	// provider+virtualModel without throwing (as buildModelCatalog does).
+	const shim = llm.registration("virtual-a").adapter;
+	assert.equal(shim.virtualModel, "virtual-a"); // default = route id
+	const resolved = await llm.resolveModelInfo("virtual-a", "virtual-a");
+	assert.equal(resolved.id, "virtual-a");
+});
+
+test("shim advertises the explicit route.model field when configured", async () => {
+	const ctx = new Context();
+	const llm = setup(ctx, [
+		{ id: "virtual-a", model: "routed-chat", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }
+	]);
+	const models = await llm.listModels("virtual-a");
+	assert.equal(models.length, 1);
+	assert.deepEqual(models[0], { provider: "virtual-a", id: "routed-chat", name: "virtual-a/routed-chat" });
+	const shim = llm.registration("virtual-a").adapter;
+	assert.equal(shim.virtualModel, "routed-chat");
+	const resolved = await llm.resolveModelInfo("virtual-a", "routed-chat");
+	assert.equal(resolved.id, "routed-chat");
 });
 
 test("failover: alpha failure -> retry -> beta serves; exhaustion -> no retry", async () => {

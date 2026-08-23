@@ -12,7 +12,9 @@ algorithm, with failover.
 {
   "routes": [
     {
-      "id": "virtual-a",                    // the virtual provider/model id
+      "id": "virtual-a",                    // the virtual provider id
+      "model": "routed-chat",               // optional: advertised virtual model id
+                                            // (defaults to the route id -> "virtual-a")
       "algorithm": "priority",              // "priority" | "round-robin"
       "candidates": [
         { "provider": "deepseek-official", "model": "deepseek-v4-flash" },
@@ -25,7 +27,11 @@ algorithm, with failover.
 
 `routes` defaults to `[]`. The schema is `schemastery` (the DSH fork of zod):
 callable, so the same `Config` feeds `installSettingsSection` (settings
-provider) and the cordis loader (`~standard.validate`).
+provider) and the cordis loader (`~standard.validate`). `model` is optional
+and backward compatible: routes without it parse identically and advertise
+`<route-id>/<route-id>` (e.g. route `pool` advertises `pool/pool`) in the
+model picker; with it, the route advertises exactly one model under
+`<route-id>/<model>`.
 
 ## The RoutingAlgorithm extension point
 
