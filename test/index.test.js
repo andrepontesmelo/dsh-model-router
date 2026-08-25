@@ -180,9 +180,8 @@ test("failover: alpha failure -> retry -> beta serves; exhaustion -> no retry", 
 	const c2 = await collect();
 	const text = c2.filter((c) => c.type === "text-delta").map((c) => c.text).join("");
 	assert.equal(text, "beta/beta-model");
-	// Marking the SERVED candidate (beta — the corrected markCurrentFailed
-	// always marks the last-picked candidate, not whatever hasCandidate
-	// last probed) failed leaves alpha live again, so the listener retries.
+	// Marking the SERVED candidate (beta — requestFailed marks the last-picked
+	// candidate) failed leaves alpha live again, so the listener retries.
 	const stillRetry = await ctx.waterfall({}, "agent/request-error", {
 		provider: "virtual-a", failure: c1.at(-1).reason.failure, signal
 	}, () => Promise.resolve(void 0));
