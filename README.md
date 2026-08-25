@@ -78,7 +78,7 @@ answering; retries within one request never consume an extra slot). A future
 algorithm registers into the same registry — no restructuring of the shim or
 plugin entry.
 
-## Seam mechanics (proven by prototype/)
+## Seam mechanics (proven by the test suite)
 
 - A shim `LlmAdapter` (`lib/shim.js`) registers under each virtual route id
   and delegates `prepareCall`/`stream` to the real adapter via **direct
