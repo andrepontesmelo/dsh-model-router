@@ -12,7 +12,10 @@ algorithm, with failover.
 {
   "routes": [
     {
-      "id": "virtual-a",                    // the virtual provider id
+      "id": "virtual-a",                    // unique route id
+      "provider": "routed",                // optional: virtual provider id to register under
+                                            // (defaults to the route id). Routes sharing a
+                                            // provider form ONE picker group
       "model": "routed-chat",               // optional: advertised virtual model id
                                             // (defaults to the route id -> "virtual-a")
       "algorithm": "priority",              // "priority" | "round-robin"
@@ -31,7 +34,11 @@ provider) and the cordis loader (`~standard.validate`). `model` is optional
 and backward compatible: routes without it parse identically and advertise
 `<route-id>/<route-id>` (e.g. route `pool` advertises `pool/pool`) in the
 model picker; with it, the route advertises exactly one model under
-`<route-id>/<model>`.
+`<route-id>/<model>`. `provider` is likewise optional: routes sharing one
+`provider` id register as a single virtual provider whose picker group
+advertises one model per route (e.g. `routed/routed` + `routed/strong`),
+and the request's model id selects the route. Advertised model ids must be
+unique within a provider group.
 
 ## The RoutingAlgorithm extension point
 
@@ -41,6 +48,7 @@ An algorithm is a **factory**:
 factory(ctx, routes) => {
   select(route, callCtx)    // -> candidate | undefined
   onFailure(route, candidate, callCtx)
+  onDispatch?(route, candidate, callCtx) // first dispatch of a request
   onSuccess?(route, candidate, callCtx)   // optional; shim calls it on success
 }
 ```
@@ -49,17 +57,24 @@ factory(ctx, routes) => {
   (`undefined` = exhausted, failover stops, error surfaces). It must be PURE:
   the shim probes it for boolean checks (`peek()`), so no state may advance.
 - `onFailure` records a failed candidate so the next `select` skips it.
+- `onDispatch` (optional) is called by the shim in `prepareCall` the moment a
+  candidate is picked for a request's FIRST dispatch — BEFORE the stream
+  starts. Allocation-style algorithms spend their slot here.
 - `onSuccess` (optional) is called by the shim when a dispatch finishes
-  successfully — e.g. round-robin advances its rotation cursor there.
+  successfully; kept for custom algorithms (round-robin rotates in
+  `onDispatch` instead).
 - `callCtx` carries per-request state (`{ failed }`, a set keyed by
-  `provider\0model`); algorithms may extend it.
+  `provider\0model`; round-robin adds a `dispatched` marker the shim clears
+  on terminal finish); algorithms may extend it.
 
 The registry maps name → factory (`lib/routing.js`): `register(name, factory)`,
 `resolve(name)`, `has(name)`, `names()`. Both built-ins are implemented:
 `'priority'` (ordered failover — first candidate whose provider has a live
 registered adapter and has not failed this request) and `'round-robin'`
-(rotating cursor over live candidates; advances only on successful dispatch,
-so retries within one request never consume a rotation slot). A future
+(rotating cursor over live candidates; each REQUEST consumes its slot at
+DISPATCH time — `onDispatch`, before the stream starts — so two prompts sent
+back-to-back land on different candidates even while the first is still
+answering; retries within one request never consume an extra slot). A future
 algorithm registers into the same registry — no restructuring of the shim or
 plugin entry.
 
