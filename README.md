@@ -214,6 +214,32 @@ mock adapters prove config parsing, per-route shim registration, registry
 resolution, delegation, priority failover/exhaustion/reset, and cycle
 rejection.
 
+## Smoke
+
+```sh
+npm run smoke                              # LOCAL: in-memory drills, no network/keys
+npm run smoke -- deployed <profile>        # DEPLOYED: named dsh profile
+npm run smoke -- deployed <profile> --patch ./overlay.yml   # overlay layers
+npm run smoke -- deployed <profile> --dump-only             # composition report, no dispatch
+```
+
+LOCAL re-runs the drill minimum through the real plugin code (shim,
+algorithms, backoff store): priority exhaustion surfaces an error; escalating
+sleep windows annotate failures (`30s -> 1m0s -> 2m0s`); cooldown resets on
+own success; round-robin alternates dispatches; `NO_CANDIDATE` stops retry
+cleanly. Same zero-network guarantee as `npm test`.
+
+DEPLOYED parses the profile's composed configuration
+(`dsh --profile <name> --dump-config`) for the plugin's routes and where
+`agent-default-model` points, then answers ONE task through the live profile
+so the routes actually dispatch. Needs network plus whatever credentials the
+profile's providers require. Knobs: `DSH_HOME`, `DSH_BIN`,
+`SMOKE_TIMEOUT_S`, `SMOKE_VERBOSE=1`.
+
+This command is the pre-install/deploy ritual: run LOCAL everywhere before
+installing; run DEPLOYED against a configured profile before relying on its
+routes.
+
 ## Known limitations
 
 - **Round-robin changes the real model across requests**: resume/retry can
