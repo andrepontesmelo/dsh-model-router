@@ -18,6 +18,7 @@
   },
   "files": [
     "lib",
+    "examples",
     "cordis.patch.yml",
     "README.md"
   ],
@@ -43,7 +44,9 @@
     "deepseek-harness",
     "plugin",
     "model-router",
-    "dsh-plugin"
+    "dsh-plugin",
+    "routing-algorithm",
+    "failover"
   ],
   "license": "MIT",
   "author": "Andre Melo",

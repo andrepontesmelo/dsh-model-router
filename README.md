@@ -81,6 +81,83 @@ answering; retries within one request never consume an extra slot). A future
 algorithm registers into the same registry — no restructuring of the shim or
 plugin entry.
 
+## Writing your own algorithm
+
+Two steps, plus one seam note.
+
+1. **Write a factory** (one module). `examples/least-dispatched.js` is a
+   complete, working example — a fair-share spreader that hands each first
+   dispatch to the usable candidate dispatched least often — and
+   `test/examples.test.js` proves it composes through the real shim +
+   failover path, wired exactly the way `apply()` wires built-ins. Skeleton:
+
+   ```js
+   export function myFactory(ctx, routes) {            // ctx: plugin Cordis context
+     const crossRequestState = new Map();              // OUTLIVES one request: put it HERE
+     return {
+       select(route, callCtx) {
+         // PURE scan of route.candidates: skip dead providers, entries in
+         // callCtx.failed, cooled candidates; return ONE candidate object
+         // (or undefined to exhaust failover and surface the error).
+         // Must NOT advance anything - the shim re-runs it as a probe.
+       },
+       onFailure(route, candidate, callCtx) {
+         callCtx.failed.add(`${candidate.provider}\u0000${candidate.model}`);
+       },
+       onDispatch?(route, candidate, callCtx) {
+         // Slot for this request is consumed NOW (first dispatch, before
+         // the stream starts). Allocation lives here, never in onSuccess.
+       },
+       onSuccess?(route, candidate, callCtx) {
+         // Dispatch finished successfully - outcome bookkeeping only
+         // (e.g. reset backoff). Fires after the stream ends.
+       }
+     };
+   }
+   ```
+
+2. **Register it against the existing registry** (`lib/routing.js`) before
+   the plugin resolves its routes; names are unique and duplicates throw:
+
+   ```js
+   import { defaultRegistry } from "dsh-model-router/routing";
+   defaultRegistry.register("my-algo", myFactory);
+   ```
+
+Seam note: the plugin resolves every configured `route.algorithm` from this
+same `defaultRegistry` (`lib/index.js`) — registry in, instance attached to
+the route, `RouterShim` over the virtual provider. One caveat today: the
+Config schema still ENUMERATES shipped names
+(`z.union(["priority", "round-robin"])`, `lib/index.js`), so routing config
+itself cannot reference a third-party name until that union widens. The
+registry/shim/failover machinery accepts any registered algorithm right now
+— `test/examples.test.js` drives the example through `RouterShim` exactly
+as config-driven requests flow.
+
+### Factory contract — the fine print
+
+- **`select` must be pure.** After each failure the shim calls `onFailure`
+  and then RE-RUNS `select` just as a boolean probe ("anyone left?" —
+  `lib/shim.js requestFailed`). A `select` that mutates state answers the
+  probe differently than the real pick and corrupts the chain: same
+  arguments in, same answer out, however many times it runs.
+- **Failure keying** is the string `${provider}\0${model}` inside the
+  shim-owned `callCtx.failed` Set. Filter with the same key shape;
+  `examples/least-dispatched.js` shows the convention.
+- **Allocation timing.** Anything meaning "this candidate was taken for
+  this request" belongs in `onDispatch`: it fires inside `prepareCall`
+  BEFORE the stream starts, so a second request issued while the first is
+  still answering sees the slot gone. `onSuccess` fires only when a
+  dispatch SUCCEEDS — too late for allocation; right for outcomes.
+- **`callCtx` extension etiquette.** Per-request extras go under your own
+  key (round-robin uses `callCtx.dispatched`; prefer
+  `callCtx.yourAlgo = {...}`): never reassign or delete the shim-owned
+  `{ failed, current }` fields. On terminal success the shim swaps in
+  FRESH records that carry ONLY `{ failed, current }` (replace-on-success,
+  `lib/shim.js`) — custom keys intentionally die with their record, so
+  anything that must survive past one request lives on the factory closure,
+  not on `callCtx`.
+
 ## Seam mechanics (proven by the test suite)
 
 - A shim `LlmAdapter` (`lib/shim.js`) registers under each virtual route id
