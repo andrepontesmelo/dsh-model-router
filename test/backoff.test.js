@@ -17,7 +17,7 @@ import { LlmRuntime, LlmAdapter, LlmError } from "@deepseek-ai/dsh-llm";
 import { apply } from "../lib/index.js";
 import { defaultRegistry } from "../lib/routing.js";
 import {
-	BACKOFF, createBackoffStore, DEFAULT_INITIAL_MS, DEFAULT_MAX_MS, noopBackoff
+	BACKOFF, createBackoffStore, DEFAULT_INITIAL_MS, DEFAULT_MAX_MS, formatWindow, noopBackoff
 } from "../lib/backoff.js";
 
 /** Minimal in-memory adapter emitting a valid chunk stream, no network. */
@@ -310,4 +310,56 @@ test("backoff store is reachable through ctx[BACKOFF] and shared across routes",
 		provider: "a", failure: c1.at(-1).reason.failure, signal: s1
 	}, () => Promise.resolve(void 0));
 	assert.equal(store.isUsable("alpha", "alpha-model"), false, "failure recorded into the shared store");
+});
+// --- provenance annotations: peekWindowMs / remainingMs / formatWindow ---
+
+test("backoff: peekWindowMs reports the window the NEXT failure earns", () => {
+	let now = 1000;
+	const store = createBackoffStore({ now: () => now });
+	assert.equal(store.peekWindowMs("a", "m"), DEFAULT_INITIAL_MS, "fresh candidate -> next failure earns 30s");
+	store.recordFailure("a", "m"); // earned 30s; failures = 1
+	assert.equal(store.peekWindowMs("a", "m"), DEFAULT_INITIAL_MS * 2, "next failure earns 60s");
+	store.recordFailure("a", "m"); // failures = 2
+	assert.equal(store.peekWindowMs("a", "m"), DEFAULT_INITIAL_MS * 4, "next failure earns 120s");
+	store.reset("a", "m");
+	assert.equal(store.peekWindowMs("a", "m"), DEFAULT_INITIAL_MS, "reset restarts the peek ladder");
+	// Peek never records: usable state untouched.
+	assert.equal(store.isUsable("a", "m"), true);
+});
+
+test("backoff: repeated peeks cap at exactly 8h like recordings do", () => {
+	let now = 0;
+	const store = createBackoffStore({ now: () => now });
+	for (let i = 0; i < 12; i++) store.recordFailure("a", "m");
+	assert.equal(store.peekWindowMs("a", "m"), DEFAULT_MAX_MS);
+	assert.equal(formatWindow(DEFAULT_MAX_MS), "8h0m");
+});
+
+test("backoff: remainingMs counts down live, null when absent, 0 once elapsed", () => {
+	let now = 1000;
+	const store = createBackoffStore({ now: () => now });
+	assert.equal(store.remainingMs("a", "m"), null, "never failed -> null (not sleeping)");
+	store.recordFailure("a", "m"); // until = 31000
+	assert.equal(store.remainingMs("a", "m"), 30000);
+	now = 16000;
+	assert.equal(store.remainingMs("a", "m"), 15000);
+	now = 31000;
+	assert.equal(store.remainingMs("a", "m"), 0, "elapsed -> 0, not negative");
+	store.reset("a", "m");
+	assert.equal(store.remainingMs("a", "m"), null);
+});
+
+test("formatWindow renders GUI-style durations with an hours branch", () => {
+	assert.equal(formatWindow(45_200), "45.2s");
+	assert.equal(formatWindow(30_000), "30s");
+	assert.equal(formatWindow(60_000), "1m0s");
+	assert.equal(formatWindow(162_000), "2m42s");
+	assert.equal(formatWindow(3_600_000), "1h0m");
+	assert.equal(formatWindow(3_900_000), "1h5m");
+	assert.equal(formatWindow(DEFAULT_MAX_MS), "8h0m");
+});
+
+test("noop fallback: peek and remaining report nothing to annotate", () => {
+	assert.equal(noopBackoff.peekWindowMs("a", "m"), null);
+	assert.equal(noopBackoff.remainingMs("a", "m"), null);
 });
