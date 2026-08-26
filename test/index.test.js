@@ -17,6 +17,7 @@ import { Config, apply } from "../lib/index.js";
 import { createRegistry, defaultRegistry } from "../lib/routing.js";
 import { SettingsProvider } from "@deepseek-ai/dsh-settings";
 import { RouterShim } from "../lib/shim.js";
+import { BACKOFF, createBackoffStore } from "../lib/backoff.js";
 
 test("Config parses with defaults (empty routes)", () => {
 	assert.deepEqual(Config({}), { routes: [] });
@@ -798,4 +799,134 @@ test("a schema-valid but plugin-invalid settings edit is rejected at write time;
 	assert.equal(settings.docs["dsh-model-router"], void 0, "rejected edit persists nothing");
 	assert.equal(llm.registration("routed").adapter, serving, "live shim unchanged after rejected edit");
 	assert.equal(await drain(llm, "routed", "a"), "alpha/alpha-model", "still serves the previous routes");
+});
+// --- sleep-window provenance annotations (the backoff ladder made visible) ---
+
+test("failed attempts carry their earned sleep window in the failure message", async () => {
+	const ctx = new Context();
+	const llm = new LlmRuntime(ctx);
+	llm.registerAdapter(["alpha"], failingMock("alpha", "alpha-model", false));
+	apply(ctx, { routes: [{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }] });
+	const request = { provider: "virtual-a", model: "virtual-a", messages: [] };
+	const prepared = await llm.prepareCall(request, new AbortController().signal);
+	const chunks = [];
+	for await (const chunk of prepared.stream(request)) chunks.push(chunk);
+	assert.equal(chunks.at(-1).reason.kind, "error");
+	// The thrown adapter error passed through the shim, so its message names
+	// exactly what the failure costs: the window recordFailure is about to assign.
+	assert.equal(chunks.at(-1).reason.failure.message, "alpha down (sleep 30s)");
+});
+
+test("terminal error finishes are annotated too and keep code/status", async () => {
+	const ctx = new Context();
+	const llm = new LlmRuntime(ctx);
+	llm.registerAdapter(["alpha"], new (class extends MockAdapter {
+		async *stream() {
+			yield { type: "text-delta", index: 0, text: "partial" };
+			yield { type: "finish", reason: { kind: "error", failure: { code: "RATE_LIMIT", message: "slow down", status: 429 } } };
+		}
+	})("alpha", "alpha-model"));
+	apply(ctx, { routes: [{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }] });
+	const request = { provider: "virtual-a", model: "virtual-a", messages: [] };
+	const prepared = await llm.prepareCall(request, new AbortController().signal);
+	const chunks = [];
+	for await (const chunk of prepared.stream(request)) chunks.push(chunk);
+	const failure = chunks.at(-1).reason.failure;
+	assert.equal(failure.message, "slow down (sleep 30s)", "finish-failure rewritten before yielding");
+	assert.equal(failure.code, "RATE_LIMIT");
+	assert.equal(failure.status, 429);
+});
+
+test("escalated failures annotate the grown window (direct shim, injectable clock)", async () => {
+	const ctx = new Context();
+	const llm = new LlmRuntime(ctx);
+	llm.registerAdapter(["alpha"], failingMock("alpha", "alpha-model", false));
+	let now = 0;
+	const store = createBackoffStore({ now: () => now });
+	// Mirror apply(): the factory reads its store from ctx[BACKOFF], so BOTH
+	// the shim (annotation) and the algorithm (recording) share ONE store.
+	ctx[BACKOFF] = store;
+	const raw = [{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }];
+	const shim = new RouterShim(llm, [{ ...raw[0], advertisedModel: "virtual-a", algorithmInstance: defaultRegistry.resolve("priority")(ctx, raw) }], store);
+	llm.registerAdapter(["virtual-a"], shim);
+	const run = async () => {
+		const request = { provider: "virtual-a", model: "virtual-a", messages: [] };
+		const prepared = await llm.prepareCall(request, new AbortController().signal);
+		const chunks = [];
+		for await (const chunk of prepared.stream(request)) chunks.push(chunk);
+		return chunks.at(-1).reason.failure.message;
+	};
+	assert.equal(await run(), "alpha down (sleep 30s)", "first failure earns 30s");
+	shim.requestFailed(new AbortController().signal, {
+		route: { provider: "virtual-a", model: "virtual-a" },
+		resolved: { provider: "alpha", model: "alpha-model" }
+	});
+	now = 31_000; // cooldown elapsed, failure count remembered -> next earns 60s
+	assert.equal(await run(), "alpha down (sleep 1m0s)", "escalated failure shows the doubled window");
+});
+
+test("an aborted signal rethrows untouched — no sleep annotation on aborts", async () => {
+	const store = createBackoffStore();
+	const pick = { provider: "alpha", model: "m" };
+	const shim = new RouterShim(new LlmRuntime(new Context()), [{
+		id: "v",
+		advertisedModel: "v",
+		algorithm: "priority",
+		candidates: [pick],
+		algorithmInstance: { select: () => pick, onFailure() {} }
+	}], store);
+	const controller = new AbortController();
+	controller.abort();
+	async function* boom() {
+		yield { type: "text-delta", index: 0, text: "x" };
+		throw new Error("boom");
+	}
+	let caught;
+	try {
+		for await (const chunk of shim.forward(boom(), controller.signal, { id: "v", candidates: [pick] }, pick)) void chunk;
+	} catch (error) {
+		caught = error;
+	}
+	assert.ok(caught, "stream error propagated");
+	assert.ok(!(caught instanceof LlmError), "raw error rethrown, not wrapped");
+	assert.equal(caught.message, "boom");
+});
+
+test("full exhaustion names who is sleeping and for how long", async () => {
+	const ctx = new Context();
+	const llm = new LlmRuntime(ctx);
+	llm.registerAdapter(["alpha"], failingMock("alpha", "alpha-model", false));
+	apply(ctx, { routes: [{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }] });
+	const request = { provider: "virtual-a", model: "virtual-a", messages: [] };
+	const signal = new AbortController().signal;
+	const collect = async () => {
+		const prepared = await llm.prepareCall(request, signal);
+		const chunks = [];
+		for await (const chunk of prepared.stream(request)) chunks.push(chunk);
+		return chunks;
+	};
+	const c1 = await collect(); // alpha fails, annotated "(sleep 30s)"
+	await ctx.waterfall({}, "agent/request-error", {
+		provider: "virtual-a", failure: c1.at(-1).reason.failure, signal
+	}, () => Promise.resolve(void 0));
+	// Next dispatch: alpha is cooling down -> nothing live -> NO_CANDIDATE
+	// whose message lists the sleeper with its REMAINING time (live number).
+	await assert.rejects(
+		() => llm.prepareCall(request, signal),
+		(error) => error.code === "NO_CANDIDATE"
+			&& error.message.startsWith('routed model "virtual-a" (route "virtual-a") has no live candidates — sleeping: alpha/alpha-model ')
+			&& /[0-9.]+s$/.test(error.message)
+	);
+});
+
+test("exhaustion without cooling candidates keeps the historical plain message", async () => {
+	const ctx = new Context();
+	const llm = new LlmRuntime(ctx);
+	// ghost has no adapter: skipped by liveness, not sleeping -> no list.
+	apply(ctx, { routes: [{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "ghost", model: "ghost-model" }] }] });
+	await assert.rejects(
+		() => llm.prepareCall({ provider: "virtual-a", model: "virtual-a", messages: [] }, new AbortController().signal),
+		(error) => error.code === "NO_CANDIDATE"
+			&& error.message === 'routed model "virtual-a" (route "virtual-a") has no live candidates'
+	);
 });
