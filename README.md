@@ -92,6 +92,22 @@ plugin entry.
   and returns `{ kind: "retry" }` while candidates remain. Exhaustion → no
   retry → the error surfaces.
 
+## Global backoff for failing candidates
+
+- A real `provider + model` that fails dispatch is **suppressed from selection**
+  for a cooldown starting at **30s**, doubling per successive failure, capped
+  at **8 hours**.
+- The cooldown key is the concrete **provider + model** (same `\0`-joined key
+  as the routing algorithms), and it is **global across all routes** of one
+  plugin instance: a candidate failing in route A is suppressed in route B too.
+- A **successful dispatch of that same provider+model fully resets** the
+  cooldown (the escalation restarts at 30s). A success on any *other*
+  candidate does not re-enable a cooled one.
+- The backoff is **hardcoded** (`lib/backoff.js`), no config surface.
+- When every candidate is cooled (or otherwise unusable), `select` returns
+  `undefined`, the shim throws **`NO_CANDIDATE`** and the failover listener
+  stops retrying — same exhaustion behavior as today.
+
 ## Test
 
 ```sh

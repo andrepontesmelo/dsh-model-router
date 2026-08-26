@@ -180,12 +180,17 @@ test("failover: alpha failure -> retry -> beta serves; exhaustion -> no retry", 
 	const c2 = await collect();
 	const text = c2.filter((c) => c.type === "text-delta").map((c) => c.text).join("");
 	assert.equal(text, "beta/beta-model");
-	// Marking the SERVED candidate (beta — requestFailed marks the last-picked
-	// candidate) failed leaves alpha live again, so the listener retries.
+	// Re-firing the STALE failure payload now marks the SERVED candidate
+	// (beta — requestFailed marks the last-picked candidate) failed. The
+	// per-request failed set then holds both alpha and beta, and alpha is
+	// ALSO suppressed by its 30s backoff cooldown (it genuinely failed a
+	// moment ago) — so no candidate is live and the listener must NOT retry.
+	// Backoff forbids bouncing back to a genuinely failed candidate even
+	// when the per-request failed set has been rewritten.
 	const stillRetry = await ctx.waterfall({}, "agent/request-error", {
 		provider: "virtual-a", failure: c1.at(-1).reason.failure, signal
 	}, () => Promise.resolve(void 0));
-	assert.deepEqual(stillRetry, { kind: "retry" });
+	assert.equal(stillRetry, void 0);
 	// Genuine exhaustion (all real candidates failing) is covered by the
 	// dedicated "priority: exhaustion stops retrying" test below, which walks
 	// fresh failing dispatches instead of re-firing a stale failure.
@@ -337,7 +342,7 @@ test("priority: exhaustion stops retrying and surfaces the error", async () => {
 	await assert.rejects(llm.prepareCall(request, signal), /no live candidates/);
 });
 
-test("priority: failed set resets after a successful dispatch", async () => {
+test("priority: failed set resets after a successful dispatch — but a backoff-cooled candidate stays skipped", async () => {
 	const { ctx, llm, request, signal } = prioritySetup({ alphaOk: false, betaOk: true });
 	// alpha fails once, beta serves -> success resets the failed set.
 	const c1 = await llm.prepareCall(request, signal);
@@ -352,11 +357,15 @@ test("priority: failed set resets after a successful dispatch", async () => {
 	for await (const chunk of c2.stream(request)) chunks2.push(chunk);
 	const text2 = chunks2.filter((c) => c.type === "text-delta").map((c) => c.text).join("");
 	assert.equal(text2, "beta/beta-model");
-	// After the successful beta dispatch, alpha is usable again on the next request.
+	// The success reset the PER-REQUEST failed set — but NOT alpha's global
+	// backoff: onSuccess only resets the backoff of the candidate that
+	// succeeded (beta). Alpha genuinely failed and stays suppressed for its
+	// 30s cooldown, so the next request picks beta again, not alpha.
 	const c3 = await llm.prepareCall(request, signal);
 	const chunks3 = [];
 	for await (const chunk of c3.stream(request)) chunks3.push(chunk);
-	assert.equal(chunks3.at(-1).reason.kind, "error"); // alpha picked again (failed set reset)
+	assert.equal(chunks3.at(-1).reason.kind, "stop"); // beta served again; cooled alpha skipped
+	assert.equal(chunks3.filter((c) => c.type === "text-delta").map((c) => c.text).join(""), "beta/beta-model");
 });
 
 // --- round-robin (rotating cursor) ---
