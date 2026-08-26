@@ -108,6 +108,21 @@ plugin entry.
   `undefined`, the shim throws **`NO_CANDIDATE`** and the failover listener
   stops retrying — same exhaustion behavior as today.
 
+### Sleep windows in provenance
+
+The backoff ladder is made visible on both failure surfaces the shim owns, so
+the durable `llm/attempt` events (rendered by the web provenance view) carry
+the cost of each failure:
+
+- A failed attempt's error message gains a suffix with the window that failure
+  earns, human-readable via `formatWindow`: e.g. `alpha down (sleep 30s)`,
+  escalating to `(sleep 1m0s)`, `(sleep 2m0s)`, ... capped at `(sleep 8h0m)`.
+- Full exhaustion names the sleepers with their **remaining** time (a live
+  number, unlike the historical earned window):
+  `... has no live candidates — sleeping: a/m 29.9s, b/n 1m0s`.
+- Aborted streams are never annotated; with no store (`noopBackoff`) every
+  suffix is omitted and messages stay byte-identical to the unannotated era.
+
 ## Test
 
 ```sh
