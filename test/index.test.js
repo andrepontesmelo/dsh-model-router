@@ -528,6 +528,111 @@ test("delegation cycles are rejected at apply time; acyclic nesting is legal", a
 });
 
 
+// --- replace-on-success records (race-scenario matrix, design 2026-08-26) ---
+//
+// A terminal success used to CLEAR the shared per-(signal, route) call
+// records in place, so a sibling request's success could wipe marks a
+// still-running failover chain relies on. Settled fix: the success path
+// swaps FRESH records into the request map; running chains keep their
+// private snapshot object. Matrix: (a) snapshot survives a sibling's
+// success; (b) post-success lookups see clean state; (c) global cooldown
+// semantics unchanged by the swap; (d) round-robin slots unchanged.
+
+/** The call record currently visible through the shim for one signal+route. */
+function visibleRecord(shim, signal, routeId) {
+	return shim.requests.get(signal)?.byRoute.get(routeId);
+}
+
+test("priority (a): a sibling's terminal success does not wipe the running chain's failed set", async () => {
+	const { ctx, llm, collect, request, signal } = prioritySetup({ alphaOk: false, betaOk: true });
+	const shim = llm.registration(request.provider).adapter;
+	// Chain A, attempt 1: alpha fails mid-stream; the failover listener
+	// marks it on this signal's record — the mark the chain relies on.
+	const cA1 = await collect();
+	assert.equal(cA1.at(-1).reason.kind, "error");
+	const action = await ctx.waterfall({}, "agent/request-error", {
+		provider: request.provider, failure: cA1.at(-1).reason.failure, signal
+	}, () => Promise.resolve(void 0));
+	assert.deepEqual(action, { kind: "retry" });
+	const chainRecord = visibleRecord(shim, signal, request.model);
+	assert.equal(chainRecord.failed.has("alpha\u0000alpha-model"), true);
+
+	// Sibling B now runs ON THE SAME SIGNAL to a full terminal success while
+	// chain A is logically still in flight.
+	const cB = await collect();
+	assert.equal(cB.at(-1).reason.kind, "stop");
+
+	// (a) The chain's private record was NOT mutated in place: its alpha
+	// mark survives the sibling's success and remains usable by a probe.
+	assert.equal(chainRecord.failed.has("alpha\u0000alpha-model"), true);
+});
+
+test("priority (b): after a success, fresh per-route records are swapped in clean", async () => {
+	const { ctx, llm, collect, request, signal } = prioritySetup({ alphaOk: false, betaOk: true });
+	const shim = llm.registration(request.provider).adapter;
+	// alpha fails once so the record carries a mark...
+	const cA = await collect();
+	assert.equal(cA.at(-1).reason.kind, "error");
+	await ctx.waterfall({}, "agent/request-error", {
+		provider: request.provider, failure: cA.at(-1).reason.failure, signal
+	}, () => Promise.resolve(void 0));
+	// ...then a successful dispatch must REPLACE the record instead of
+	// clearing fields on it.
+	const before = visibleRecord(shim, signal, request.model);
+	await collect(); // serves beta -> terminal success
+	const fresh = visibleRecord(shim, signal, request.model);
+	assert.notEqual(fresh, before); // new object swapped into the map
+	assert.equal(fresh.failed.size, 0);
+	assert.ok(!fresh.dispatched); // next request consumes afresh
+});
+
+test("priority (c): global cross-route cooldown semantics unchanged by the swap", async () => {
+	const { ctx, llm, collect, request, signal } = prioritySetup({ alphaOk: false, betaOk: true });
+	// alpha fails once, then beta serves -> terminal success swap happens,
+	// but the GLOBAL store keeps cooling alpha while beta alone resets.
+	const cA = await collect();
+	assert.equal(cA.at(-1).reason.kind, "error");
+	await ctx.waterfall({}, "agent/request-error", {
+		provider: request.provider, failure: cA.at(-1).reason.failure, signal
+	}, () => Promise.resolve(void 0));
+	await collect(); // serves beta -> terminal success + swap
+	const backoff = ctx[BACKOFF];
+	assert.equal(backoff.isUsable("alpha", "alpha-model"), false); // still cooling
+	assert.equal(backoff.isUsable("beta", "beta-model"), true);    // reset by own success
+	// Behaviorally: the next request consumes afresh from clean records and
+	// STILL avoids the cooled-down candidate — the per-request mark is gone,
+	// only global suppression keeps alpha out.
+	const c3 = await collect();
+	assert.equal(c3.filter((c) => c.type === "text-delta").map((c) => c.text).join(""), "beta/beta-model");
+});
+
+test("round-robin (d): rotation slot semantics unchanged across a success-driven swap", async () => {
+	const { ctx, llm, collect, request, signal } = rrSetup({ withGamma: true });
+	const shim = llm.registration(request.provider).adapter;
+	// Chain A dispatches alpha (slot consumed, marker set) but has not
+	// streamed yet when it prepares — its stream completion comes later.
+	const preparedChainA = await llm.prepareCall(request, signal);
+	const chainRecord = visibleRecord(shim, signal, request.model);
+	assert.equal(chainRecord.dispatched, true);
+	// Sibling B runs to a full terminal success mid-chain-A. The shared-
+	// state era would wipe chain A's `dispatched` marker here; replacement
+	// must leave the chain's own record intact.
+	const cB = await collect();
+	assert.equal(cB.at(-1).reason.kind, "stop"); // beta serves sibling
+	assert.equal(chainRecord.dispatched, true);
+	// Chain A now finishes streaming alpha successfully (its OWN swap).
+	for await (const chunk of preparedChainA.stream(request)) void chunk;
+	// Rotation advanced exactly ONCE across both requests (alpha's pick);
+	// the guarded sibling consumed no extra slot, and the post-success
+	// fresh records re-arm first-dispatch advancement:
+	// next -> beta (advances), then -> gamma, then alpha again.
+	const text = async () => (await collect()).filter((c) => c.type === "text-delta").map((c) => c.text).join("");
+	assert.equal(await text(), "beta/beta-model");
+	assert.equal(await text(), "gamma/gamma-model");
+	assert.equal(await text(), "alpha/alpha-model");
+});
+
+
 test("diamond delegation: outer virtual provider dispatches through inner virtual provider to the concrete adapter", async () => {
 	const ctx = new Context();
 	const llm = new LlmRuntime(ctx);

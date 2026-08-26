@@ -64,8 +64,11 @@ factory(ctx, routes) => {
   successfully; kept for custom algorithms (round-robin rotates in
   `onDispatch` instead).
 - `callCtx` carries per-request state (`{ failed }`, a set keyed by
-  `provider\0model`; round-robin adds a `dispatched` marker the shim clears
-  on terminal finish); algorithms may extend it.
+  `provider\0model`; round-robin adds a `dispatched` marker); algorithms may
+  extend it. On terminal success the shim swaps in fresh call records
+  (replace-on-success) instead of mutating live ones — a running failover
+  chain keeps its private snapshot even if a sibling request succeeds
+  concurrently.
 
 The registry maps name → factory (`lib/routing.js`): `register(name, factory)`,
 `resolve(name)`, `has(name)`, `names()`. Both built-ins are implemented:
@@ -139,11 +142,6 @@ rejection.
 - **Round-robin changes the real model across requests**: resume/retry can
   land on a different real model than produced earlier history (breaks the
   KV-cache prefix). Accepted for v1.
-- **Failed-candidate state is per shim instance**, shared by all in-flight
-  requests on that route. A concurrent success can clear failure marks a
-  still-running failover chain relies on — the worst case is one redundant
-  retry of a down candidate (bounded). Fine for the single-user local
-  harness; per-request keying via `callCtx` is the ready-made hardening seam.
 - **Delegation cycles are rejected at config time** (`apply()` throws on any
   route graph whose candidates delegate back into a virtual provider,
   directly or transitively) — otherwise such a config would recurse in the
