@@ -244,7 +244,12 @@ routes.
 
 - **Round-robin changes the real model across requests**: resume/retry can
   land on a different real model than produced earlier history (breaks the
-  KV-cache prefix). Accepted for v1.
+  KV-cache prefix). Accepted for v1 — the adapter seam carries no
+  conversation identifier, so sticky-per-conversation is impossible
+  plugin-only. Round-robin spreads load across independent traffic and does
+  not protect provider prompt caches; **cache-sensitive routes should choose
+  `priority`**. True stickiness returns as a fresh effort after portfolio
+  publication, when DSH can pass a session id through the seam.
 - **Delegation cycles are rejected at config time** (`apply()` throws on any
   route graph whose candidates delegate back into a virtual provider,
   directly or transitively) — otherwise such a config would recurse in the
