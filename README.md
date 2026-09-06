@@ -1,5 +1,13 @@
 # dsh-model-router
 
+[![CI](https://github.com/andrepontesmelo/dsh-model-router/actions/workflows/ci.yml/badge.svg)](https://github.com/andrepontesmelo/dsh-model-router/actions/workflows/ci.yml)
+[![Version](https://img.shields.io/github/package-json/v/andrepontesmelo/dsh-model-router/main?label=version)](package.json)
+![local gate](https://img.shields.io/badge/local%20gate-71%20tests%20%2B%20smoke-brightgreen)
+
+![dsh-model-router banner](docs/images/banner.png)
+
+> PLACEHOLDER banner — drafted from live CLI output; swap for real brand art at review.
+
 A [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (DSH) plugin that
 turns model selection into **intelligent routing**: declare a virtual model id in config,
 bind it to a routing algorithm over a list of real provider/model candidates, and use the
@@ -21,6 +29,10 @@ to a real model chosen by the algorithm, with automatic failover.
 - **Your own algorithm.** `RoutingAlgorithm` is a factory contract (`select`, `onFailure`,
   optional `onDispatch`/`onSuccess`) — implement one and register it.
 
+![Failover stack — virtual id, failed attempt, recovery](docs/images/failover-stack.png)
+
+> PLACEHOLDER screenshot — drafted from live CLI output; swap for a real capture at review.
+
 ## Why it exists
 
 Model pools are the reality: a cheap fast model, a strong one, a spare. Hardcoding one id
@@ -28,6 +40,8 @@ means a provider outage becomes your outage. Routing at the plugin layer means t
 the harness never learns about failure — and never has to.
 
 ## Install
+
+Requires Node ≥ 22 and a DSH profile to install into.
 
 ```bash
 npm pack
@@ -38,6 +52,31 @@ Or straight from GitHub:
 
 ```bash
 dsh plugin --profile <your-profile> add github:andrepontesmelo/dsh-model-router
+```
+
+> [!WARNING]
+> Routing is config-driven and bypasses nothing you did not declare — but every candidate
+> you list is a real provider that your prompts and completions will be sent to. Audit the
+> `candidates` list before installing a route config you did not write, and pin the
+> install (tag or local tarball) rather than floating on a branch.
+
+Verify the build before installing:
+
+```bash
+npm pack --dry-run          # inspect exactly what ships
+sha256sum dsh-model-router-<version>.tgz
+```
+
+Compare the checksum with the one published with the release you are installing. A
+`github:` install resolves the default branch at install time — pin a tag for
+reproducibility.
+
+Useful commands once installed:
+
+```bash
+npm test            # 71-test unit suite (node --test)
+npm run smoke       # 5 failover drills, in-memory, zero network
+dsh plugin --profile <your-profile> list
 ```
 
 ## Quick start
@@ -63,9 +102,9 @@ Pick `routed-chat` in the model picker (or set it as an agent's model) and route
 failover, the response provenance shows the real model that answered and any candidates
 sleeping in their backoff window.
 
-<!-- TODO(andre): screenshot of the DSH web UI showing a failover stack explanation.
-     Drop at docs/images/failover-stack.png and uncomment:
-![Failover stack in the DSH web UI](docs/images/failover-stack.png) -->
+![Config in cordis.patch.yml becomes a model-picker entry](docs/images/config-to-picker.png)
+
+> PLACEHOLDER screenshot — drafted from live CLI output; swap for a real capture at review.
 
 ### Writing your own algorithm
 
@@ -83,6 +122,18 @@ An algorithm is a factory `(ctx, routes) => algorithm`:
 The shim probes `select` for boolean checks, so it must stay pure; state advances happen
 in the `on*` callbacks. The test suite in `test/` pins these seam mechanics.
 
+## Docs
+
+Start at the [docs index](docs/index.md):
+
+- [Architecture](docs/architecture.md) — plugin wiring, shim, routing, backoff.
+- [Development](docs/development.md) — layout, test gate, how to run the smoke suite.
+
+## Contributing
+
+PRs welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the workflow and the local gate.
+Security issues: [SECURITY.md](SECURITY.md) (do not open a public issue).
+
 ## Roadmap
 
 - Session stickiness — pin a session to the candidate that first served it *(not yet
@@ -98,7 +149,7 @@ in the `on*` callbacks. The test suite in `test/` pins these seam mechanics.
 
 ```bash
 npm test        # unit suite
-npm run smoke   # end-to-end smoke against a live profile
+npm run smoke   # in-memory failover drills (LOCAL mode)
 ```
 
 ## License
