@@ -6,8 +6,6 @@
 
 ![dsh-model-router banner](docs/images/banner.png)
 
-> PLACEHOLDER banner — drafted from live CLI output; swap for real brand art at review.
-
 A [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (DSH) plugin that
 turns model selection into **intelligent routing**: declare a virtual model id in config,
 bind it to a routing algorithm over a list of real provider/model candidates, and use the
