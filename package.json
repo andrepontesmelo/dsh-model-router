@@ -1,6 +1,6 @@
 {
-  "name": "dsh-model-router",
-  "version": "0.2.0",
+  "name": "@andrepontesmelo/dsh-model-router",
+  "version": "0.2.1",
   "description": "DSH plugin: declare VIRTUAL model ids bound to a pluggable routing algorithm (priority, round-robin) over real provider/model candidates; using the virtual id transparently dispatches to a real provider chosen by the algorithm, with failover.",
   "type": "module",
   "main": "lib/index.js",
