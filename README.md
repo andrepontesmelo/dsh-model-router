@@ -159,8 +159,11 @@ Security issues: [SECURITY.md](SECURITY.md) (do not open a public issue).
 
 ## Roadmap
 
-- Session stickiness — pin a session to the candidate that first served it *(not yet
-  implemented)*.
+- Session stickiness — pin a session to the candidate that first served it — **BLOCKED
+  UPSTREAM**: a plugin picks its candidate in the adapter `prepareCall(provider, model,
+  signal)` seam, which carries no session id (the loop's optional `sessionId` on request
+  options only surfaces later, at stream time, after the pick), so a plugin cannot pin
+  per conversation. Unblocks if DSH passes a session id through candidate selection.
 
 ## Requirements
 
