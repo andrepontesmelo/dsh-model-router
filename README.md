@@ -27,9 +27,18 @@ to a real model chosen by the algorithm, with automatic failover.
 - **Your own algorithm.** `RoutingAlgorithm` is a factory contract (`select`, `onFailure`,
   optional `onDispatch`/`onSuccess`) — implement one and register it.
 
-![Failover stack — virtual id, failed attempt, recovery](docs/images/failover-stack.png)
+Failover for a single turn — a candidate fails, the next one serves, and the
+provenance records who answered:
 
-> PLACEHOLDER screenshot — drafted from live CLI output; swap for a real capture at review.
+```mermaid
+flowchart LR
+    V["request: routed-chat"] --> P["algorithm selects<br>the first live candidate"]
+    P --> C1["candidate 1<br>alpha/alpha-model"]
+    C1 -- "stream error" --> F["mark failed +<br>backoff cooldown"]
+    F --> R["retry: select the<br>next live candidate"]
+    R --> C2["candidate 2<br>beta/beta-model"]
+    C2 -- "stop" --> OK["success — provenance<br>records beta as the model that served"]
+```
 
 ## Why it exists
 
@@ -100,9 +109,17 @@ Pick `routed-chat` in the model picker (or set it as an agent's model) and route
 failover, the response provenance shows the real model that answered and any candidates
 sleeping in their backoff window.
 
-![Config in cordis.patch.yml becomes a model-picker entry](docs/images/config-to-picker.png)
+The config-to-picker stack — a declared route becomes a real model-picker
+entry backed by the candidate pool:
 
-> PLACEHOLDER screenshot — drafted from live CLI output; swap for a real capture at review.
+```mermaid
+flowchart TD
+    C["cordis.patch.yml<br>route routed-chat, algorithm priority,<br>candidates: deepseek-official/deepseek-v4-flash, pi-ai/…"] --> A["apply(): validate config,<br>group routes by provider"]
+    A --> S["RouterShim registers the<br>virtual provider routed-chat"]
+    S --> L["llm runtime"]
+    L --> M["model picker advertises<br>routed-chat"]
+    M --> D["picking routed-chat dispatches through<br>the algorithm with transparent failover"]
+```
 
 ### Writing your own algorithm
 
