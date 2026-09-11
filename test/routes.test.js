@@ -133,4 +133,8 @@ test("groupSignature changes on any shape edit", () => {
 	const model = group();
 	model[0].advertisedModel = "chat";
 	assert.notEqual(groupSignature(model), baseline);
+	// Edited per-candidate reasoning level (rides on the candidate list).
+	const reasoning = group();
+	reasoning[0].candidates = [{ provider: "alpha", model: "m1", reasoning: "high" }];
+	assert.notEqual(groupSignature(reasoning), baseline);
 });

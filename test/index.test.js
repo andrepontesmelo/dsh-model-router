@@ -50,6 +50,21 @@ test("Config accepts an optional per-route model field and normalizes", () => {
 	] });
 });
 
+test("Config accepts an optional per-candidate reasoning level and normalizes", () => {
+	// With `reasoning`: field passes through unchanged.
+	assert.deepEqual(Config({ routes: [
+		{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model", reasoning: "high" }] }
+	] }), { routes: [
+		{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model", reasoning: "high" }] }
+	] });
+	// Without `reasoning`: identical shape to the pre-field schema (backward compatible).
+	assert.deepEqual(Config({ routes: [
+		{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }
+	] }), { routes: [
+		{ id: "virtual-a", algorithm: "priority", candidates: [{ provider: "alpha", model: "alpha-model" }] }
+	] });
+});
+
 /** Minimal in-memory adapter emitting a valid chunk stream, no network. */
 class MockAdapter extends LlmAdapter {
 	constructor(provider, model) {
@@ -108,6 +123,80 @@ test("a virtual route delegates to the real adapter via direct registration look
 	}
 	const text = chunks.filter((c) => c.type === "text-delta").map((c) => c.text).join("");
 	assert.equal(text, "alpha/alpha-model");
+	assert.equal(chunks.at(-1).reason.kind, "stop");
+});
+
+// --- per-candidate reasoning levels ---
+
+/**
+ * Mock adapter exposing adapter-owned reasoning metadata (the
+ * `reasoning.efforts` shape the runtime validates `reasoningEffort`
+ * against) and CAPTURING the options its stream receives, so tests can
+ * assert exactly what the shim forwarded. `efforts = []` models a provider
+ * with no reasoning concept at all.
+ */
+class ReasoningAdapter extends LlmAdapter {
+	constructor(provider, model, efforts) {
+		super();
+		this.provider = provider;
+		this.model = model;
+		this.efforts = efforts;
+		this.seen = null; // last forwarded stream options
+	}
+	providerInfo(p) {
+		return { id: p, name: `${p}-mock` };
+	}
+	async resolveModel(provider, model) {
+		const base = { provider, id: model, name: model };
+		if (this.efforts.length === 0) return base;
+		return { ...base, reasoning: { efforts: this.efforts.map((id) => ({ id, name: id })) } };
+	}
+	async *stream(options) {
+		this.seen = options;
+		yield { type: "text-delta", index: 0, text: `${this.provider}/${this.model}` };
+		yield { type: "finish", reason: { kind: "stop" } };
+	}
+}
+
+/** Register `alpha` behind a ReasoningAdapter and dispatch one virtual call. */
+async function reasoningDispatch(efforts, candidate) {
+	const ctx = new Context();
+	const llm = new LlmRuntime(ctx);
+	const alpha = new ReasoningAdapter("alpha", "alpha-model", efforts);
+	llm.registerAdapter(["alpha"], alpha);
+	apply(ctx, { routes: [{ id: "virtual-a", algorithm: "priority", candidates: [candidate] }] });
+	const request = { provider: "virtual-a", model: "virtual-a", messages: [] };
+	const prepared = await llm.prepareCall(request, new AbortController().signal);
+	const chunks = [];
+	for await (const chunk of prepared.stream(request)) chunks.push(chunk);
+	return { alpha, chunks };
+}
+
+test("candidate reasoning: a supported level is forwarded as the dispatched reasoningEffort", async () => {
+	const { alpha, chunks } = await reasoningDispatch(["low", "high"], { provider: "alpha", model: "alpha-model", reasoning: "high" });
+	assert.equal(alpha.seen.reasoningEffort, "high");
+	// A configured level never breaks the dispatch itself.
+	assert.equal(chunks.filter((c) => c.type === "text-delta").map((c) => c.text).join(""), "alpha/alpha-model");
+	assert.equal(chunks.at(-1).reason.kind, "stop");
+});
+
+test("candidate reasoning: no configured level forwards the options untouched", async () => {
+	const { alpha, chunks } = await reasoningDispatch(["low", "high"], { provider: "alpha", model: "alpha-model" });
+	assert.equal(alpha.seen.reasoningEffort, undefined);
+	assert.equal(chunks.at(-1).reason.kind, "stop");
+});
+
+test("candidate reasoning: a level the model does not advertise is ignored, not fatal", async () => {
+	// The model reasons, but only at "low"/"high" — "max" keeps the provider default.
+	const { alpha, chunks } = await reasoningDispatch(["low", "high"], { provider: "alpha", model: "alpha-model", reasoning: "max" });
+	assert.equal(alpha.seen.reasoningEffort, undefined);
+	assert.equal(chunks.filter((c) => c.type === "text-delta").map((c) => c.text).join(""), "alpha/alpha-model");
+	assert.equal(chunks.at(-1).reason.kind, "stop");
+});
+
+test("candidate reasoning: a provider with no reasoning concept ignores the level", async () => {
+	const { alpha, chunks } = await reasoningDispatch([], { provider: "alpha", model: "alpha-model", reasoning: "high" });
+	assert.equal(alpha.seen.reasoningEffort, undefined);
 	assert.equal(chunks.at(-1).reason.kind, "stop");
 });
 

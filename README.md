@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/andrepontesmelo/dsh-model-router/actions/workflows/ci.yml/badge.svg)](https://github.com/andrepontesmelo/dsh-model-router/actions/workflows/ci.yml)
 [![Version](https://img.shields.io/github/package-json/v/andrepontesmelo/dsh-model-router/main?label=version)](package.json)
-![local gate](https://img.shields.io/badge/local%20gate-71%20tests%20%2B%20smoke-brightgreen)
+![local gate](https://img.shields.io/badge/local%20gate-76%20tests%20%2B%20smoke-brightgreen)
 
 ![dsh-model-router banner](docs/images/banner.png)
 
@@ -24,6 +24,9 @@ to a real model chosen by the algorithm, with automatic failover.
     candidates get **exponential backoff**, giving a struggling model time to recover
     before it is tried again.
   - `round-robin` — distribute calls across the pool.
+- **Per-candidate reasoning levels.** A candidate can declare a `reasoning` effort that
+  is applied when that candidate serves the request; a model without a matching level
+  simply keeps its provider default.
 - **Your own algorithm.** `RoutingAlgorithm` is a factory contract (`select`, `onFailure`,
   optional `onDispatch`/`onSuccess`) — implement one and register it.
 
@@ -81,7 +84,7 @@ reproducibility.
 Useful commands once installed:
 
 ```bash
-npm test            # 71-test unit suite (node --test)
+npm test            # 76-test unit suite (node --test)
 npm run smoke       # 5 failover drills, in-memory, zero network
 dsh plugin --profile <your-profile> list
 ```
@@ -97,7 +100,7 @@ Add a route to your profile's `cordis.patch.yml`:
       "id": "routed-chat",
       "algorithm": "priority",              // "priority" | "round-robin"
       "candidates": [
-        { "provider": "deepseek-official", "model": "deepseek-v4-flash" },
+        { "provider": "deepseek-official", "model": "deepseek-v4-flash", "reasoning": "high" },
         { "provider": "pi-ai", "model": "..." }
       ]
     }
@@ -108,6 +111,11 @@ Add a route to your profile's `cordis.patch.yml`:
 Pick `routed-chat` in the model picker (or set it as an agent's model) and route. On
 failover, the response provenance shows the real model that answered and any candidates
 sleeping in their backoff window.
+
+A candidate's optional `reasoning` is an effort id from that provider's model. When the
+candidate serves a request, the shim dispatches with that reasoning effort; if the model
+has no reasoning concept (or no such effort), the level is ignored and the provider's own
+default applies — the request never fails because of it.
 
 The config-to-picker stack — a declared route becomes a real model-picker
 entry backed by the candidate pool:
@@ -153,7 +161,6 @@ Security issues: [SECURITY.md](SECURITY.md) (do not open a public issue).
 
 - Session stickiness — pin a session to the candidate that first served it *(not yet
   implemented)*.
-- Per-model reasoning-level customization *(not yet implemented)*.
 
 ## Requirements
 
