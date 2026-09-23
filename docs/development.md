@@ -18,7 +18,7 @@ test/             unit suite (node --test), pins seam mechanics
 Everything must pass before a commit is considered done:
 
 ```bash
-npm test          # unit suite — currently 71 tests
+npm test          # unit suite — currently 76 tests
 npm run smoke     # LOCAL mode: 5 failover drills, in-memory, zero network
 ```
 
