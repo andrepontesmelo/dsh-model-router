@@ -54,7 +54,7 @@ network plus whatever credentials the profile's providers require.
 - ESM only (`"type": "module"`), tabs in `lib/`, Node ≥ 22 — no transpile step.
 - Tests use `node --test` + `node:assert/strict`; no test framework dependency.
 - The smoke suite doubles as executable documentation of the failover drills.
-- Glossary terms ([CONTEXT.md](../CONTEXT.md)) are used verbatim in code comments, tests
+- Glossary terms ([GLOSSARY.md](../GLOSSARY.md)) are used verbatim in code comments, tests
   and errors — keep them consistent.
 
 ## Before you push

@@ -13,7 +13,7 @@ pluggable algorithm over real provider/model candidates, with transparent failov
 
 ## Reference in this repo
 
-- [CONTEXT.md](../CONTEXT.md) — glossary: virtual route, model attempt, model
+- [GLOSSARY.md](../GLOSSARY.md) — glossary: virtual route, model attempt, model
   provenance, global cooldown, sleep window, dispatch slot.
 - [cordis.patch.yml](../cordis.patch.yml) — the bundle-patch entry that inserts the
   plugin into a profile.

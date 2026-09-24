@@ -23,7 +23,7 @@ CI runs the same gate on Node 22; a PR is mergeable when both are green.
 - `select` in a routing algorithm stays pure — see
   [docs/architecture.md](docs/architecture.md) and the contract comment in
   [lib/routing.js](lib/routing.js).
-- Glossary terms from [CONTEXT.md](CONTEXT.md) are used verbatim in comments, tests and
+- Glossary terms from [GLOSSARY.md](GLOSSARY.md) are used verbatim in comments, tests and
   errors.
 - Update [docs/](docs/index.md) when the config surface or a contract changes.
 

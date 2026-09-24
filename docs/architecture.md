@@ -1,7 +1,7 @@
 # Architecture
 
 How dsh-model-router wires into [DSH](https://www.npmjs.com/package/@deepseek-ai/dsh).
-Read [CONTEXT.md](../CONTEXT.md) first for the glossary (virtual route, model attempt,
+Read [GLOSSARY.md](../GLOSSARY.md) first for the glossary (virtual route, model attempt,
 provenance, global cooldown, sleep window, dispatch slot).
 
 ## One diagram
