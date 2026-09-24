@@ -1,2 +1,4 @@
 sessions.jsonl
 *.tmp.*
+closes.jsonl
+hooks.log
