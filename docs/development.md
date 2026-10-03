@@ -39,8 +39,8 @@ network plus whatever credentials the profile's providers require.
 
 ## Writing your own algorithm
 
-1. Read the factory contract in [lib/routing.js](../lib/routing.js) and the walkthrough
-   in the [README](../README.md#writing-your-own-algorithm).
+1. Read the factory contract in [lib/routing.js](../lib/routing.js) and the overview
+   in the [README](../README.md#what-it-does).
 2. Copy [examples/least-dispatched.js](../examples/least-dispatched.js) as the shape.
 3. Rules that the tests will catch:
    - `select` must be PURE (no state advance) — the shim probes it as a predicate.
