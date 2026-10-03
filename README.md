@@ -51,7 +51,7 @@ Requires Node ≥ 22 and a DSH profile to install into.
 
 ```bash
 npm pack
-dsh plugin --profile <your-profile> add file:/path/to/dsh-model-router-<version>.tgz
+dsh plugin --profile <your-profile> add file:/path/to/andrepontesmelo-dsh-model-router-<version>.tgz
 ```
 
 Or straight from GitHub:
